@@ -136,13 +136,16 @@ class MoteSearchThread(threading.Thread):
         self.server = server
         self.search_path = ''
         self.hostname = ''
+        self.password = password
         self.connection_string = connection_string
         connection_string_parts = connection_string.split('@')
         if len(connection_string_parts) > 1:
             self.hostname = connection_string_parts[1]
+            self.username = connection_string_parts[0]
         else:
             self.hostname = connection_string
         print "Hostname: " + self.hostname
+        print "Username: " + self.username
         print self.connection_string
 
 
@@ -193,7 +196,7 @@ class MoteSearchThread(threading.Thread):
                 hostkey = host_keys[self.hostname][hostkeytype]
                 print 'Using host key of type %s' % hostkeytype
             
-            t = paramiko.Transport((self.connection_string, 22))
+            t = paramiko.Transport((self.hostname, 22))
             t.connect(username=self.username, password=self.password, hostkey=hostkey)
             self.sftp = paramiko.SFTPClient.from_transport(t)
 
