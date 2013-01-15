@@ -113,7 +113,6 @@ class MoteStatusCommand(sublime_plugin.WindowCommand):
 
 class MoteDisconnectCommand(sublime_plugin.WindowCommand):
     def run(self, server=''):
-        print "HI"
         MOTES[server]['thread'].add_command('exit','')
 
 
@@ -136,14 +135,19 @@ class MoteSearchThread(threading.Thread):
         self.server = server
         self.search_path = ''
         self.hostname = ''
-        self.password = password
+        self.password = password #didn't see this in the namespace so added it
         self.connection_string = connection_string
+        self.os_mode = os.name
+
+        #Identify if this is a username@hostname string
         connection_string_parts = connection_string.split('@')
         if len(connection_string_parts) > 1:
             self.hostname = connection_string_parts[1]
             self.username = connection_string_parts[0]
         else:
             self.hostname = connection_string
+
+        #lovely debugging
         print "Hostname: " + self.hostname
         print "Username: " + self.username
         print self.connection_string
@@ -174,8 +178,11 @@ class MoteSearchThread(threading.Thread):
 
         threading.Thread.__init__(self)
 
+    def is_os_mode(self, mode):
+        return self.os_mode == mode
+
     def connect(self):
-        if not os.name == 'posix':
+        if not self.is_os_mode('posix'):
             if not self.sftp:
                 self.sftp = psftp(self.connection_string)
                 self.sftp.next()
@@ -222,6 +229,34 @@ class MoteSearchThread(threading.Thread):
         else:
             return (None,None)
 
+    def send_cmd(self, command, path, show_panel):
+        if command == 'ls':
+            if show_panel == True:
+                sublime.set_timeout(lambda:sublime.status_message('Opening %s' % path),0)
+                self.ls(path)
+            if show_panel == True:
+                self.showfilepanel()
+                sublime.set_timeout(lambda:sublime.status_message('Finished opening %s' % path),0)
+        elif command == 'open':
+            sublime.set_timeout(lambda:sublime.status_message('Downloading %s' % path),0)
+            self.download(path)
+            sublime.set_timeout(lambda:sublime.status_message('Finished downloading %s' % path),0)
+        elif command == 'save':
+            sublime.set_timeout(lambda:sublime.status_message('Uploading %s' % path),0)
+            self.upload(path)
+            sublime.set_timeout(lambda:sublime.status_message('Finished uploading %s' % path),0)
+        elif command == 'cd':
+            self.cd(path, show_panel)
+
+
+    def cd(self, path, show_panel):
+        if not self.is_os_mode('posix'):
+            self.sftp.send('cd "%s"' % (path) )
+            self.add_command('ls','', show_panel)
+        else:
+            print "changing dir: " + path
+            self.sftp.chdir(path)
+            self.add_command('ls','', show_panel)
 
     def run(self):
         sublime.set_timeout(lambda:sublime.status_message('Connecting to %s' % self.server),0)
@@ -241,31 +276,15 @@ class MoteSearchThread(threading.Thread):
 
             print command, path, show_panel
 
-            if command == 'ls':
-                if show_panel == True:
-                    sublime.set_timeout(lambda:sublime.status_message('Opening %s' % path),0)
-                self.ls(path)
-                if show_panel == True:
-                    self.showfilepanel()
-                    sublime.set_timeout(lambda:sublime.status_message('Finished opening %s' % path),0)
-            elif command == 'open':
-                sublime.set_timeout(lambda:sublime.status_message('Downloading %s' % path),0)
-                self.download(path)
-                sublime.set_timeout(lambda:sublime.status_message('Finished downloading %s' % path),0)
-            elif command == 'save':
-                sublime.set_timeout(lambda:sublime.status_message('Uploading %s' % path),0)
-                self.upload(path)
-                sublime.set_timeout(lambda:sublime.status_message('Finished uploading %s' % path),0)
-            elif command == 'cd':
-                self.sftp.send('cd "%s"' % (path) )
-                self.add_command('ls','', show_panel)
-            elif command == 'exit':
+            self.send_cmd(command, path, show_panel)
+
+            if command == 'exit':
                 break
             else:
                 pass
 
 
-        sublime.set_timeout(lambda:sublime.status_message('Disconnectin from %s' % self.server),0)
+        sublime.set_timeout(lambda:sublime.status_message('Disconnecting from %s' % self.server),0)
         try:
             self.sftp.send('exit')
         except StopIteration:
@@ -276,8 +295,15 @@ class MoteSearchThread(threading.Thread):
 
     def ls(self, search_path = ''):
         fullpath = cleanpath(self.search_path,search_path)
+        if not self.is_os_mode('posix'):
+            partial_result = self.sftp.send('ls "%s"' % fullpath)
+            
+        else:
+            results = "\n".join(self.sftp.listdir(fullpath))
+            print repr(results)
 
-        results = self.cleanls(fullpath, self.sftp.send('ls "%s"' % fullpath))
+            results = self.cleanls(fullpath, results)
+            print repr(results)
 
         if self.idle_recursive:
             subfolders = dict((k,v) for k,v in results.items() if v['type'] == 'folder')
@@ -359,10 +385,6 @@ def psftp(connection_string):
         if command == 'exit':
             untilprompt(p,'exit')
             return
-
-def sftp(connection_string):
-    command = ''
-    #exe = 
 
 def untilprompt(proc, strinput = None):
     if strinput:
