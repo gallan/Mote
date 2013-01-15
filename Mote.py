@@ -1,13 +1,20 @@
 import sublime, sublime_plugin
 
 import subprocess
-import os, time
+import os, time, inspect, sys
 import threading
 import json
 import posixpath
 import time
 import shutil
 from collections import deque
+
+# use this if you want to include modules from a subforder
+cmd_subfolder = os.path.realpath(os.path.abspath(os.path.join(os.path.split(inspect.getfile( inspect.currentframe() ))[0],"lib")))
+if cmd_subfolder not in sys.path:
+    sys.path.insert(0, cmd_subfolder)
+
+import paramiko
 
 MOTES = {}
 
@@ -103,8 +110,10 @@ class MoteStatusCommand(sublime_plugin.WindowCommand):
             print MOTES[server]['thread'].sftp
             print MOTES[server]['thread'].results
 
+
 class MoteDisconnectCommand(sublime_plugin.WindowCommand):
     def run(self, server=''):
+        print "HI"
         MOTES[server]['thread'].add_command('exit','')
 
 
@@ -126,7 +135,16 @@ class MoteSearchThread(threading.Thread):
     def __init__(self, server, search_path='', connection_string='', password=None, idle_recursive=False, private_key=None, port=None):
         self.server = server
         self.search_path = ''
+        self.hostname = ''
         self.connection_string = connection_string
+        connection_string_parts = connection_string.split('@')
+        if len(connection_string_parts) > 1:
+            self.hostname = connection_string_parts[1]
+        else:
+            self.hostname = connection_string
+        print "Hostname: " + self.hostname
+        print self.connection_string
+
 
 
         if ('-pw' not in connection_string) and password:
@@ -154,10 +172,33 @@ class MoteSearchThread(threading.Thread):
         threading.Thread.__init__(self)
 
     def connect(self):
-        if not self.sftp:
-            self.sftp = psftp(self.connection_string)
-            self.sftp.next()
-        return self
+        if not os.name == 'posix':
+            if not self.sftp:
+                self.sftp = psftp(self.connection_string)
+                self.sftp.next()
+            return self
+        else:
+            try:
+                host_keys = paramiko.util.load_host_keys(os.path.expanduser('~/.ssh/known_hosts'))
+            except IOError:
+                try:
+                    # try ~/ssh/ too, because windows can't have a folder named ~/.ssh/
+                    host_keys = paramiko.util.load_host_keys(os.path.expanduser('~/ssh/known_hosts'))
+                except IOError:
+                    print '*** Unable to open host keys file'
+                    host_keys = {}
+
+            if host_keys.has_key(self.hostname):
+                hostkeytype = host_keys[self.hostname].keys()[0]
+                hostkey = host_keys[self.hostname][hostkeytype]
+                print 'Using host key of type %s' % hostkeytype
+            
+            t = paramiko.Transport((self.connection_string, 22))
+            t.connect(username=self.username, password=self.password, hostkey=hostkey)
+            self.sftp = paramiko.SFTPClient.from_transport(t)
+
+            return self
+            
 
     def disconnect(self):
         self.add_command('exit','')
@@ -316,6 +357,9 @@ def psftp(connection_string):
             untilprompt(p,'exit')
             return
 
+def sftp(connection_string):
+    command = ''
+    #exe = 
 
 def untilprompt(proc, strinput = None):
     if strinput:
