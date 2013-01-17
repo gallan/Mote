@@ -167,8 +167,8 @@ class MoteSearchThread(threading.Thread):
 
         self.idle_recursive = idle_recursive
 
-
         self.results = {}
+        self.transport = None
         self.sftp = None
 
         self.results_lock = threading.Condition()
@@ -202,10 +202,12 @@ class MoteSearchThread(threading.Thread):
                 hostkeytype = host_keys[self.hostname].keys()[0]
                 hostkey = host_keys[self.hostname][hostkeytype]
                 print 'Using host key of type %s' % hostkeytype
-            
-            t = paramiko.Transport((self.hostname, 22))
-            t.connect(username=self.username, password=self.password, hostkey=hostkey)
-            self.sftp = paramiko.SFTPClient.from_transport(t)
+            try:
+                self.transport = t = paramiko.Transport((self.hostname, 22))
+                t.connect(username=self.username, password=self.password, hostkey=hostkey)
+                self.sftp = paramiko.SFTPClient.from_transport(t)
+            except Exception:
+                print "transport Failed"
 
             return self
             
@@ -230,6 +232,8 @@ class MoteSearchThread(threading.Thread):
             return (None,None)
 
     def send_cmd(self, command, path, show_panel):
+        print "Command: " + command
+        print "Path: " + path
         if command == 'ls':
             if show_panel == True:
                 sublime.set_timeout(lambda:sublime.status_message('Opening %s' % path),0)
@@ -255,15 +259,13 @@ class MoteSearchThread(threading.Thread):
             self.add_command('ls','', show_panel)
         else:
             print "changing dir: " + path
-            self.sftp.chdir(path)
+            self.sftp.chdir("./" +path)
             self.add_command('ls','', show_panel)
 
     def run(self):
         sublime.set_timeout(lambda:sublime.status_message('Connecting to %s' % self.server),0)
         self.connect()
         while True:
-
-
 
             self.results_lock.acquire()
             if len(self.command_deque) == 0:
@@ -286,22 +288,30 @@ class MoteSearchThread(threading.Thread):
 
         sublime.set_timeout(lambda:sublime.status_message('Disconnecting from %s' % self.server),0)
         try:
-            self.sftp.send('exit')
+            if not self.is_os_mode('posix'):
+                self.sftp.send('exit')
+            else:
+                self.sftp.close()
+                print self.transport.is_active()
+                self.transport.close()
+                print self.transport.is_active()
+                print self.transport.stop_thread()
+                self.sftp = None
+
         except StopIteration:
             pass
-        self.sftp = None
 
         threading.Thread.__init__(self)
+        print threading.enumerate()
 
     def ls(self, search_path = ''):
         fullpath = cleanpath(self.search_path,search_path)
         if not self.is_os_mode('posix'):
-            partial_result = self.sftp.send('ls "%s"' % fullpath)
-            
+            results = self.sftp.send('ls "%s"' % fullpath)
+            results = self.cleanls(fullpath, results)
         else:
-            results = "\n".join(self.sftp.listdir(fullpath))
+            results = "\n".join(self.sftp.listdir(self.sftp.getcwd()))
             print repr(results)
-
             results = self.cleanls(fullpath, results)
             print repr(results)
 
