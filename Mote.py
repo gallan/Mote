@@ -206,9 +206,10 @@ class MoteSearchThread(threading.Thread):
                 self.transport = t = paramiko.Transport((self.hostname, 22))
                 t.connect(username=self.username, password=self.password, hostkey=hostkey)
                 self.sftp = paramiko.SFTPClient.from_transport(t)
+                print "SFTP INIT: "+ str(self.transport.is_active())
+                self.add_command('cd',self.search_path, True)
             except Exception:
                 print "transport Failed"
-
             return self
             
 
