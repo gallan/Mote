@@ -133,11 +133,12 @@ class MoteUploadOnSave(sublime_plugin.EventListener):
 class MoteSearchThread(threading.Thread):
     def __init__(self, server, search_path='', connection_string='', password=None, idle_recursive=False, private_key=None, port=None):
         self.server = server
-        self.search_path = ''
+        self.search_path = search_path
         self.hostname = ''
         self.password = password #didn't see this in the namespace so added it
         self.connection_string = connection_string
         self.os_mode = os.name
+        self.base_dir = ''
 
         #Identify if this is a username@hostname string
         connection_string_parts = connection_string.split('@')
@@ -260,8 +261,11 @@ class MoteSearchThread(threading.Thread):
             self.add_command('ls','', show_panel)
         else:
             print "changing dir: " + path
-            self.sftp.chdir("./" +path)
-            self.add_command('ls','', show_panel)
+            print self.sftp.getcwd()
+            self.sftp.chdir(path)
+            self.search_path = self.sftp.getcwd()
+            self.add_command('ls',path, show_panel)
+
 
     def run(self):
         sublime.set_timeout(lambda:sublime.status_message('Connecting to %s' % self.server),0)
@@ -298,39 +302,49 @@ class MoteSearchThread(threading.Thread):
                 print self.transport.is_active()
                 print self.transport.stop_thread()
                 self.sftp = None
+                self._Thread__stop()
+                print threading.enumerate()
+                #if os.path.exists(os.path.join(sublime.packages_path(),'Mote','temp',self.server)):
+                    #print os.path.join(sublime.packages_path(),'Mote','temp',self.server)
+                    #self.rm_rf(str(os.path.join(sublime.packages_path(),'Mote','temp',self.server)))
 
         except StopIteration:
             pass
 
         threading.Thread.__init__(self)
-        print threading.enumerate()
-
+        
     def ls(self, search_path = ''):
         fullpath = cleanpath(self.search_path,search_path)
         if not self.is_os_mode('posix'):
             results = self.sftp.send('ls "%s"' % fullpath)
             results = self.cleanls(fullpath, results)
+            self.results.update(results)
         else:
-            results = "\n".join(self.sftp.listdir(self.sftp.getcwd()))
-            print repr(results)
-            results = self.cleanls(fullpath, results)
-            print repr(results)
+            file_list = {}
+            file_list = dict(zip(self.sftp.listdir(self.sftp.getcwd()), self.sftp.listdir_attr(self.sftp.getcwd())))
+            #results = self.cleanls(fullpath, results)
+            results = self.cleanlsposix(fullpath, file_list)
+            self.results = results
 
         if self.idle_recursive:
             subfolders = dict((k,v) for k,v in results.items() if v['type'] == 'folder')
             for recur_folder in subfolders:
                 self.add_command('ls',results[recur_folder]['path'])
 
-        #print results
-        self.results.update(results)
-
     def download(self, path):
-        localpath = os.path.normpath(os.path.join(sublime.packages_path(),'Mote','temp',self.server,path))
+        if not self.is_os_mode('posix'):
+            localpath = os.path.normpath(os.path.join(sublime.packages_path(),'Mote','temp',self.server,path))
+        else:
+            localpath = os.path.normpath(os.path.join(sublime.packages_path(),'Mote','temp',self.server,path[1:]))
 
         if not os.path.exists(os.path.dirname(localpath)):
             os.makedirs(os.path.dirname(localpath))
 
-        self.sftp.send('get "%s" "%s"' % (path,localpath) )
+        if not self.is_os_mode('posix'):
+            self.sftp.send('get "%s" "%s"' % (path,localpath) )
+        else:
+            print "preget: "+ path+" "+localpath
+            self.sftp.get(path, localpath)
 
         sublime.set_timeout(lambda:self.window.open_file(localpath), 0)
 
@@ -339,13 +353,37 @@ class MoteSearchThread(threading.Thread):
 
     def upload(self, path):
         localpath = os.path.normpath(os.path.join(sublime.packages_path(),'Mote','temp',self.server,path))
-        self.sftp.send('put "%s" "%s"' % (localpath,path) )
+        if not self.is_os_mode('posix'):
+            self.sftp.send('put "%s" "%s"' % (localpath,path) )
+        else:
+            self.sftp.put(localpath, '/'+path)
 
     def showfilepanel(self):
         self.keys = sorted(self.results.keys())
         def show_quick_panel():
             self.window.show_quick_panel(self.keys, self.on_select)
         sublime.set_timeout(show_quick_panel, 10)
+
+    def cleanlsposix(self, fullpath, file_list):
+        paths = {}
+        paths['..'] = {}
+        paths['..']['path'] = '/'.join(self.sftp.getcwd().split('/')[0:-1])
+        paths['..']['type'] = 'folder'
+        for path, attr in file_list.items():
+            dflag = oct(attr.st_mode)
+            named_path = cleanpath(fullpath, path)
+            if str(dflag[0:2]) == '04':
+                path_key = named_path + '/..'
+            else:
+                path_key = named_path + '-'
+
+            paths[path_key] = {}
+            paths[path_key]['path'] = named_path
+            if str(dflag[0:2]) == '04':
+                paths[path_key]['type'] = 'folder'
+            else:
+                paths[path_key]['type'] = 'file'
+        return paths
 
     def cleanls(self,fullpath, out):
         paths = {}
@@ -356,6 +394,7 @@ class MoteSearchThread(threading.Thread):
 
             named_path = cleanpath(fullpath,raw_path)
             path_key = named_path + ('' if path[0] == '-' else '/..')
+            print named_path+" " +path_key + " "+path[0]
 
             #print named_path
             paths[path_key] = {}
@@ -373,9 +412,20 @@ class MoteSearchThread(threading.Thread):
         key = self.keys[picked]
 
         if self.results[key]['type'] == 'folder':
-            self.add_command('ls',self.results[key]['path'], True)
+            if not self.is_os_mode('posix'):
+                self.add_command('ls',self.results[key]['path'], True)
+            else:
+                self.add_command('cd',self.results[key]['path'], True)
         elif self.results[key]['type'] == 'file':
             self.add_command('open',self.results[key]['path'])
+
+    def rm_rf(dir):
+        for path in (os.path.join(d,f) for f in os.listdir(d)):
+            if os.path.isdir(path):
+                rm_rf(path)
+            else:
+                os.unlink(path)
+        os.rmdir(d)
 
 
 def cleanpath(*args):
